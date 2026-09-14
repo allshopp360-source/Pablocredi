@@ -635,7 +635,7 @@
       <button class="btn btn-green" onclick="sharePagarePDF()">Compartir Pagaré + Recibo por WhatsApp</button>
       <button class="btn btn-green" onclick="shareProformaPDF()" style="margin-top:10px;">Compartir Proforma por WhatsApp</button>
       <button class="btn btn-primary" onclick="closePagare()" style="margin-top:10px;">Cerrar</button>
-      <p style="font-size:11.5px;color:var(--muted);margin:12px 0 0;text-align:center;">El PDF incluye el pagaré y, en la misma hoja, el recibo del monto prestado (sin intereses), listos para que el cliente firme ambos de una sola vez.</p>
+      <p style="font-size:11.5px;color:var(--muted);margin:12px 0 0;text-align:center;">.</p>
     </div>
   </div>
 
@@ -1598,7 +1598,7 @@ function buildPagarePDF(){
   y += 22;
 
   doc.setFontSize(7.3);
-  const clausula = 'Queda expresamente convenido que la falta de pago de este pagaré me (nos) constituirá en mora automáticamente, sin necesidad de interpelación judicial o extrajudicial alguna, devengando durante el tiempo de la mora un interés del ____ %, un interés punitorio del ____ %, y una comisión del ____ % sobre el saldo adeudado, hasta su efectivo pago. Asimismo, autorizo/autorizamos que, en caso de incumplimiento, mis/nuestros datos sean informados a las centrales de riesgo crediticio, conforme a lo establecido en la Ley N.° 1682/2001 y sus modificaciones. Para todos los efectos legales y procesales, las partes se someten a la jurisdicción y competencia de los tribunales ordinarios de la República del Paraguay, constituyendo domicilio especial en las direcciones indicadas en el presente documento, donde se tendrán por válidas todas las notificaciones judiciales y extrajudiciales.';
+  const clausula = 'Queda expresamente convenido que la falta de pago de este pagaré me (nos) constituirá en mora automáticamente, sin necesidad de interpelación judicial o extrajudicial alguna, devengando durante el tiempo de la mora un interés del ____   , un interés punitorio del ____   , y una comisión del ____      sobre el saldo adeudado, hasta su efectivo pago. Asimismo, autorizo/autorizamos que, en caso de incumplimiento, mis/nuestros datos sean informados a las centrales de riesgo crediticio, conforme a lo establecido en la Ley N.° 1682/2001 y sus modificaciones. Para todos los efectos legales y procesales, las partes se someten a la jurisdicción y competencia de los tribunales ordinarios de la República del Paraguay, constituyendo domicilio especial en las direcciones indicadas en el presente documento, donde se tendrán por válidas todas las notificaciones judiciales y extrajudiciales.';
   const lines = doc.splitTextToSize(clausula, pageWidth - marginX*2);
   doc.text(lines, marginX, y);
   y += lines.length * 9 + 16;
@@ -1644,7 +1644,7 @@ function buildPagarePDF(){
   }
   doc.setDrawColor(0);
   doc.setFontSize(8); doc.setTextColor(130);
-  doc.text('Ambos documentos se firman en esta misma hoja', pageWidth/2, y - 5, {align:'center'});
+  doc.text('.', pageWidth/2, y - 5, {align:'center'});
   doc.setTextColor(0);
   y += 26;
 
@@ -1654,7 +1654,7 @@ function buildPagarePDF(){
   y += 13;
   doc.setFont(undefined,'normal'); doc.setFontSize(8);
   doc.setTextColor(120);
-  doc.text('(Recibo del monto entregado en préstamo, sin intereses)', pageWidth/2, y, {align:'center'});
+  doc.text('.', pageWidth/2, y, {align:'center'});
   doc.setTextColor(0);
   y += 22;
 
@@ -1693,7 +1693,7 @@ function buildPagarePDF(){
   y += 28;
 
   doc.setFontSize(7); doc.setTextColor(120);
-  doc.text(doc.splitTextToSize('Este recibo certifica exclusivamente la entrega del capital prestado. Las condiciones de pago, intereses y mora se rigen por el pagaré firmado en la parte superior de esta hoja.', pageWidth - marginX*2), marginX, y);
+  doc.text(doc.splitTextToSize('.', pageWidth - marginX*2), marginX, y);
   doc.setTextColor(0);
 
   return doc;
@@ -1811,7 +1811,7 @@ function buildProformaPDF(){
   y += 20;
   if(y > 700){ doc.addPage(); y = 55; }
   doc.setFontSize(8); doc.setTextColor(120);
-  const nota = 'Esta proforma es un documento informativo que detalla el plan de pagos acordado. No constituye un título de crédito ejecutivo (a diferencia del pagaré firmado).';
+  const nota = '..';
   doc.text(doc.splitTextToSize(nota, pageWidth - marginX*2), marginX, y);
   doc.setTextColor(0);
 
