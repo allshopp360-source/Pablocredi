@@ -1743,7 +1743,7 @@ function buildPagarePDF(){
   }
   doc.setDrawColor(0);
   doc.setFontSize(8); doc.setTextColor(130);
-  doc.text('Ambos documentos se firman en esta misma hoja', pageWidth/2, y - 5, {align:'center'});
+  doc.text('.', pageWidth/2, y - 5, {align:'center'});
   doc.setTextColor(0);
   y += 26;
 
@@ -1753,7 +1753,7 @@ function buildPagarePDF(){
   y += 13;
   doc.setFont(undefined,'normal'); doc.setFontSize(8);
   doc.setTextColor(120);
-  doc.text('(Recibo del monto entregado en préstamo, sin intereses)', pageWidth/2, y, {align:'center'});
+  doc.text('(.)', pageWidth/2, y, {align:'center'});
   doc.setTextColor(0);
   y += 22;
 
