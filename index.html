@@ -761,6 +761,14 @@ function renderConfigBanner(){
 }
 
 /* ---------------- API layer (Apps Script) ---------------- */
+// Genera IDs únicos combinando timestamp + azar, para evitar que dos registros
+// creados casi al mismo tiempo (misma milésima de segundo) terminen con el
+// mismo ID. Esto era la causa del bug en Caja: al buscar un cliente y hacer
+// click, a veces se seleccionaba el préstamo de otra persona porque dos
+// préstamos compartían el mismo ID (generado solo con Date.now()).
+function genId(prefix){
+  return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+}
 async function apiCall(action, sheet, payload){
   const c = getConfig();
   if(!c.url){
@@ -791,7 +799,7 @@ async function apiCall(action, sheet, payload){
 function localFallback(action, sheet, payload){
   if(action === 'list') return DATA[sheet] || [];
   if(action === 'add'){
-    payload.ID = payload.ID || ('L'+Date.now());
+    payload.ID = payload.ID || genId('L');
     DATA[sheet] = DATA[sheet] || [];
     DATA[sheet].push(payload);
     return { ok:true, data: payload };
@@ -1219,7 +1227,7 @@ async function saveLoan(){
     let cliente = PF_SELECTED_CLIENTE_ID ? (DATA.clientes||[]).find(c => c.ID === PF_SELECTED_CLIENTE_ID) : null;
     if(!cliente) cliente = (DATA.clientes||[]).find(c => (c.Nombre||'').toLowerCase() === nombre.toLowerCase());
     if(!cliente){
-      cliente = { ID:'C'+Date.now(), Nombre:nombre, CI:ci, Telefono:document.getElementById('pf-telefono').value, Direccion:document.getElementById('pf-direccion').value, Referencia:document.getElementById('pf-referencia').value, FechaRegistro:new Date().toISOString().slice(0,10) };
+      cliente = { ID:genId('C'), Nombre:nombre, CI:ci, Telefono:document.getElementById('pf-telefono').value, Direccion:document.getElementById('pf-direccion').value, Referencia:document.getElementById('pf-referencia').value, FechaRegistro:new Date().toISOString().slice(0,10) };
       await apiCall('add','clientes',cliente);
       DATA.clientes.push(cliente);
     } else if(!cliente.CI && ci){
@@ -1237,7 +1245,7 @@ async function saveLoan(){
       let codeudorCliente = PF_SELECTED_CODEUDOR_ID ? (DATA.clientes||[]).find(c => c.ID === PF_SELECTED_CODEUDOR_ID) : null;
       if(!codeudorCliente) codeudorCliente = (DATA.clientes||[]).find(c => (c.Nombre||'').toLowerCase() === codeudorNombre.toLowerCase());
       if(!codeudorCliente){
-        codeudorCliente = { ID:'C'+(Date.now()+1), Nombre:codeudorNombre, CI:codeudorCI, Telefono:codeudorTelefono, Direccion:codeudorDireccion, Referencia:'', FechaRegistro:new Date().toISOString().slice(0,10) };
+        codeudorCliente = { ID:genId('C'), Nombre:codeudorNombre, CI:codeudorCI, Telefono:codeudorTelefono, Direccion:codeudorDireccion, Referencia:'', FechaRegistro:new Date().toISOString().slice(0,10) };
         await apiCall('add','clientes',codeudorCliente);
         DATA.clientes.push(codeudorCliente);
       }
@@ -1245,7 +1253,7 @@ async function saveLoan(){
 
     const cuotaValor = Number(montoTotal) / Number(numCuotas);
     const loan = {
-      ID:'P'+Date.now(), ClienteID:cliente.ID, ClienteNombre:cliente.Nombre,
+      ID:genId('P'), ClienteID:cliente.ID, ClienteNombre:cliente.Nombre,
       MontoPrestado:Number(montoPrestado), MontoTotal:Number(montoTotal),
       Frecuencia:frecuencia, NumCuotas:Number(numCuotas), CuotaValor:cuotaValor,
       FechaInicio: document.getElementById('pf-fecha').value || new Date().toISOString().slice(0,10),
@@ -1274,11 +1282,21 @@ async function saveLoan(){
 // Ya no usamos un <select> (era difícil buscar con muchos préstamos activos).
 // Si el préstamo seleccionado deja de estar activo (por ej. se acaba de pagar
 // del todo desde otra pantalla), limpiamos la selección de la Caja.
+// Guardamos la lista de resultados mostrados y el préstamo realmente
+// seleccionado como OBJETOS (no solo el ID). Esto es clave: si en la
+// planilla llegaran a existir dos préstamos con el mismo ID (por ejemplo,
+// varios cargados casi al mismo tiempo con el sistema anterior, antes de
+// que existiera genId()), buscar "el préstamo cuyo ID es X" puede devolver
+// el préstamo equivocado. Guardando el objeto exacto que se tocó en la
+// lista, la selección y el cobro siempre corresponden a la fila en la que
+// se hizo click, sin depender de que el ID sea único.
+let CAJA_LAST_MATCHES = [];
+let CAJA_SELECTED_PRESTAMO = null;
 function renderCobrosSelect(){
   const hidden = document.getElementById('co-prestamo');
   if(!hidden) return;
   const activos = (DATA.prestamos||[]).filter(p=>(p.Estado||'Activo')!=='Pagado');
-  if(hidden.value && !activos.some(p=>p.ID===hidden.value)){
+  if(hidden.value && !activos.includes(CAJA_SELECTED_PRESTAMO)){
     clearCajaSelection();
   }
 }
@@ -1294,28 +1312,30 @@ function onCajaSearchInput(){
     ? activos.filter(p => palabras.every(pal => normalizarTexto(p.ClienteNombre||'').includes(pal)))
     : activos;
   matches = matches.slice(0,30);
+  CAJA_LAST_MATCHES = matches;
 
   if(!matches.length){
     results.innerHTML = `<div class="search-result-item" style="color:var(--muted);cursor:default;">${activos.length? 'Sin coincidencias' : 'No hay préstamos activos'}</div>`;
     results.classList.add('show');
     return;
   }
-  results.innerHTML = matches.map(p=>{
+  results.innerHTML = matches.map((p, idx)=>{
     const cuota = Number(p.CuotaValor||0);
     const restante = Number(p.NumCuotas||0) - Number(p.CuotasPagadas||0);
     const nombreMostrado = palabras.length ? resaltarCoincidencia(p.ClienteNombre||'', palabras) : (p.ClienteNombre||'');
     return `
-    <div class="search-result-item" onmousedown="selectCajaPrestamo('${p.ID}')">
+    <div class="search-result-item" onmousedown="selectCajaPrestamoAt(${idx})">
       <div class="search-result-name">${nombreMostrado}</div>
       <div class="search-result-sub">Cuota Gs. ${cuota.toLocaleString('es-PY',{maximumFractionDigits:2})} (${p.Frecuencia||''}) · ${restante} cuota(s) restantes</div>
     </div>`;
   }).join('');
   results.classList.add('show');
 }
-function selectCajaPrestamo(id){
-  const prestamo = (DATA.prestamos||[]).find(p=>p.ID===id);
+function selectCajaPrestamoAt(idx){
+  const prestamo = CAJA_LAST_MATCHES[idx];
   if(!prestamo) return;
-  document.getElementById('co-prestamo').value = id;
+  CAJA_SELECTED_PRESTAMO = prestamo;
+  document.getElementById('co-prestamo').value = prestamo.ID;
   document.getElementById('co-search').value = prestamo.ClienteNombre||'';
   document.getElementById('co-search-results').classList.remove('show');
   const restante = Number(prestamo.NumCuotas||0) - Number(prestamo.CuotasPagadas||0);
@@ -1325,6 +1345,7 @@ function selectCajaPrestamo(id){
   prefillCuota();
 }
 function clearCajaSelection(){
+  CAJA_SELECTED_PRESTAMO = null;
   document.getElementById('co-prestamo').value = '';
   document.getElementById('co-search').value = '';
   const badge = document.getElementById('co-prestamo-badge');
@@ -1338,8 +1359,7 @@ document.addEventListener('click', function(e){
   }
 });
 function prefillCuota(){
-  const sel = document.getElementById('co-prestamo');
-  const prestamo = DATA.prestamos.find(p=>p.ID===sel.value);
+  const prestamo = CAJA_SELECTED_PRESTAMO;
   if(prestamo && prestamo.CuotaValor){
     const valor = Math.round(Math.min(prestamo.CuotaValor, prestamo.SaldoPendiente??prestamo.CuotaValor)*100)/100;
     document.getElementById('co-monto').value = valor.toLocaleString('es-PY');
@@ -1353,9 +1373,13 @@ async function registerPayment(){
     const prestamoId = document.getElementById('co-prestamo').value;
     const monto = parseMonto(document.getElementById('co-monto').value);
     if(!prestamoId || !monto){ toast('Selecciona un préstamo e ingresa el monto'); return; }
-    const prestamo = DATA.prestamos.find(p=>p.ID===prestamoId);
+    // Usamos el objeto exacto que se seleccionó en la búsqueda (no un find()
+    // por ID, que podría traer otro préstamo si hay IDs repetidos en la hoja).
+    const prestamo = (CAJA_SELECTED_PRESTAMO && String(CAJA_SELECTED_PRESTAMO.ID)===String(prestamoId))
+      ? CAJA_SELECTED_PRESTAMO
+      : DATA.prestamos.find(p=>String(p.ID)===String(prestamoId));
     const pago = {
-      ID:'PG'+Date.now(), PrestamoID:prestamoId, ClienteNombre:prestamo? prestamo.ClienteNombre:'',
+      ID:genId('PG'), PrestamoID:prestamoId, ClienteNombre:prestamo? prestamo.ClienteNombre:'',
       Monto:monto, Fecha: document.getElementById('co-fecha').value || new Date().toISOString().slice(0,10),
       Metodo: document.getElementById('co-metodo').value
     };
@@ -1659,12 +1683,31 @@ function buildPagarePDF(){
   doc.text('a', marginX + 330, y);
   doc.line(marginX + 340, y+2, pageWidth - 130, y+2);
   doc.text('entera satisfacción', pageWidth - 125, y);
-  y += 34;
+  y += 24;
 
-  // Bloque de firmas: izquierda = deudor, derecha = codeudor/garante (si existe) o el responsable
+  // Cláusula de mora, intereses, comisión y autorización de informe a
+  // centrales de riesgo (base y condiciones del pagaré). Los porcentajes
+  // quedan en blanco para completarse a mano, igual que en el formato original.
+  const clausulaTexto = 'Queda expresamente convenido que la falta de pago de este pagaré me (nos) constituirá en mora automáticamente, sin necesidad de interpelación judicial o extrajudicial alguna, devengando durante el tiempo de la mora un interés del ____%, un interés punitorio del ____%, y una comisión del ____% sobre el saldo adeudado, hasta su efectivo pago. Asimismo, autorizo/autorizamos que, en caso de incumplimiento, mis/nuestros datos sean informados a las centrales de riesgo crediticio, conforme a lo establecido en la Ley N.° 1682/2001 y sus modificaciones. Para todos los efectos legales y procesales, las partes se someten a la jurisdicción y competencia de los tribunales ordinarios de la República del Paraguay, constituyendo domicilio especial en las direcciones indicadas en el presente documento, donde se tendrán por válidas todas las notificaciones judiciales y extrajudiciales.';
+  doc.setFont(undefined,'normal'); doc.setFontSize(7.3);
+  const clausulaLines = doc.splitTextToSize(clausulaTexto, pageWidth - marginX*2 - 12);
+  const clausulaBoxH = clausulaLines.length * 8.6 + 10;
+  doc.rect(marginX, y, pageWidth - marginX*2, clausulaBoxH);
+  doc.text(clausulaLines, marginX + 6, y + 10);
+  y += clausulaBoxH + 16;
+  doc.setFontSize(9);
+
+  // Bloque de firmas: izquierda = deudor, derecha = codeudor/garante.
+  // Si el préstamo no tiene codeudor cargado, el bloque derecho queda en
+  // blanco (solo las etiquetas) listo para completarse a mano, en vez de
+  // rellenarse con los datos del propio prestamista.
   const fieldsY0 = y;
-  function firmaBlock(x, startY, nombre, ci, direccion){
+  function firmaBlock(x, startY, etiqueta, nombre, ci, direccion){
     let fy = startY;
+    doc.setFont(undefined,'bold'); doc.setFontSize(8); doc.setTextColor(110);
+    doc.text(etiqueta, x, fy);
+    doc.setTextColor(0);
+    fy += 13;
     doc.setFont(undefined,'normal'); doc.setFontSize(9);
     doc.text('Nombre:', x, fy);
     doc.setFont(undefined,'bold'); doc.text(String(nombre||''), x+48, fy); doc.setFont(undefined,'normal');
@@ -1685,11 +1728,12 @@ function buildPagarePDF(){
     return fy;
   }
 
-  const fyLeft = firmaBlock(marginX, fieldsY0, cliente.Nombre, cliente.CI, cliente.Direccion);
   const tieneCodeudor = !!loan.CodeudorNombre;
-  const fyRight = tieneCodeudor
-    ? firmaBlock(rightColX, fieldsY0, loan.CodeudorNombre, loan.CodeudorCI, loan.CodeudorDireccion)
-    : firmaBlock(rightColX, fieldsY0, PABLOCREDI_RESPONSABLE.nombre, PABLOCREDI_RESPONSABLE.ci, '');
+  const fyLeft = firmaBlock(marginX, fieldsY0, 'DEUDOR', cliente.Nombre, cliente.CI, cliente.Direccion);
+  const fyRight = firmaBlock(rightColX, fieldsY0, 'CODEUDOR O GARANTE',
+    tieneCodeudor ? loan.CodeudorNombre : '',
+    tieneCodeudor ? loan.CodeudorCI : '',
+    tieneCodeudor ? loan.CodeudorDireccion : '');
   y = Math.max(fyLeft, fyRight) + 20;
 
   /* ============ Línea de corte entre ambos documentos ============ */
@@ -1891,7 +1935,7 @@ async function saveClient(){
   const ci = document.getElementById('cl-ci').value.trim();
   if(!nombre || !ci){ toast('El nombre y la CI son obligatorios'); return; }
   const cliente = {
-    ID:'C'+Date.now(), Nombre:nombre, CI:ci,
+    ID:genId('C'), Nombre:nombre, CI:ci,
     Telefono:document.getElementById('cl-telefono').value,
     Direccion:document.getElementById('cl-direccion').value,
     Referencia:document.getElementById('cl-referencia').value,
