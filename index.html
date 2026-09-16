@@ -823,7 +823,13 @@ async function loadAll(){
       const json = await res.json();
       if(json.ok && json.data && json.data.clientes){
         DATA.clientes = json.data.clientes || [];
-        DATA.prestamos = json.data.prestamos || [];
+        DATA.prestamos = (json.data.prestamos || []).map((p, idx) => {
+          // ← FIX: Generar ID si no existe
+          if(!p.ID || p.ID === '' || p.ID === null){
+            p.ID = 'PRS_' + (idx + 1) + '_' + Math.random().toString(36).substr(2, 9);
+          }
+          return p;
+        });
         DATA.pagos = json.data.pagos || [];
         cargado = true;
       }
@@ -836,7 +842,14 @@ async function loadAll(){
     // Respaldo: si el servidor aún no tiene el endpoint "listAll" (o falló),
     // se piden las 3 hojas en paralelo (antes se pedían una por una y tardaba el triple).
     const resultados = await Promise.all(sheets.map(s => apiCall('list', s)));
-    sheets.forEach((s, i) => { DATA[s] = resultados[i]; });
+    DATA.clientes = resultados[0];
+    DATA.prestamos = (resultados[1] || []).map((p, idx) => {
+      if(!p.ID || p.ID === '' || p.ID === null){
+        p.ID = 'PRS_' + (idx + 1) + '_' + Math.random().toString(36).substr(2, 9);
+      }
+      return p;
+    });
+    DATA.pagos = resultados[2];
   }
   // Si hay una URL configurada pero no llegó ni un solo cliente, avisa: puede ser
   // que la hoja esté vacía, o que la URL guardada ya no apunte al despliegue correcto.
@@ -1222,9 +1235,17 @@ async function saveLoan(){
     const frecuencia = document.getElementById('pf-frecuencia').value;
     const numCuotas = document.getElementById('pf-cuotas').value;
     const ciudad = document.getElementById('pf-ciudad').value.trim() || 'Asunción';
-    if(!nombre || !ci || !montoPrestado || !montoTotal || !numCuotas){ toast('Completa los campos obligatorios (*), incluyendo la CI'); return; }
 
-    let cliente = PF_SELECTED_CLIENTE_ID ? (DATA.clientes||[]).find(c => c.ID === PF_SELECTED_CLIENTE_ID) : null;
+    // La CI solo es obligatoria si se está creando un cliente NUEVO. Si ya
+    // seleccionaste un cliente existente (PF_SELECTED_CLIENTE_ID con valor),
+    // se permite guardar aunque a ese cliente le falte la CI en la planilla
+    // (antes esto bloqueaba el guardado con un mensaje que parecía decir
+    // "no seleccionaste el cliente", cuando en realidad sí estaba seleccionado).
+    const esClienteExistente = !!PF_SELECTED_CLIENTE_ID;
+    if(!nombre || !montoPrestado || !montoTotal || !numCuotas){ toast('Completa los campos obligatorios (*)'); return; }
+    if(!ci && !esClienteExistente){ toast('Completa la CI del cliente (o selecciónalo de la lista si ya existe)'); return; }
+
+    let cliente = PF_SELECTED_CLIENTE_ID ? (DATA.clientes||[]).find(c => String(c.ID) === String(PF_SELECTED_CLIENTE_ID)) : null;
     if(!cliente) cliente = (DATA.clientes||[]).find(c => (c.Nombre||'').toLowerCase() === nombre.toLowerCase());
     if(!cliente){
       cliente = { ID:genId('C'), Nombre:nombre, CI:ci, Telefono:document.getElementById('pf-telefono').value, Direccion:document.getElementById('pf-direccion').value, Referencia:document.getElementById('pf-referencia').value, FechaRegistro:new Date().toISOString().slice(0,10) };
@@ -1242,7 +1263,7 @@ async function saveLoan(){
       codeudorTelefono = document.getElementById('pf-codeudor-telefono').value.trim();
       codeudorDireccion = document.getElementById('pf-codeudor-direccion').value.trim();
       if(!codeudorNombre || !codeudorCI){ toast('Completa el nombre y la CI del codeudor, o desmarca la opción de codeudor'); return; }
-      let codeudorCliente = PF_SELECTED_CODEUDOR_ID ? (DATA.clientes||[]).find(c => c.ID === PF_SELECTED_CODEUDOR_ID) : null;
+      let codeudorCliente = PF_SELECTED_CODEUDOR_ID ? (DATA.clientes||[]).find(c => String(c.ID) === String(PF_SELECTED_CODEUDOR_ID)) : null;
       if(!codeudorCliente) codeudorCliente = (DATA.clientes||[]).find(c => (c.Nombre||'').toLowerCase() === codeudorNombre.toLowerCase());
       if(!codeudorCliente){
         codeudorCliente = { ID:genId('C'), Nombre:codeudorNombre, CI:codeudorCI, Telefono:codeudorTelefono, Direccion:codeudorDireccion, Referencia:'', FechaRegistro:new Date().toISOString().slice(0,10) };
@@ -1296,7 +1317,20 @@ function renderCobrosSelect(){
   const hidden = document.getElementById('co-prestamo');
   if(!hidden) return;
   const activos = (DATA.prestamos||[]).filter(p=>(p.Estado||'Activo')!=='Pagado');
-  if(hidden.value && !activos.includes(CAJA_SELECTED_PRESTAMO)){
+  if(!hidden.value) return;
+  // Buscamos por ID, no por referencia de objeto: cada vez que se refrescan los
+  // datos desde Google Sheets (por ejemplo al cambiar de pestaña), DATA.prestamos
+  // se reemplaza por objetos nuevos con los mismos datos. Comparar el objeto
+  // exacto (con .includes()) hacía que la app pensara que la selección ya no
+  // era válida y la borraba en silencio, aunque el préstamo seguía activo.
+  const actualizado = activos.find(p => String(p.ID) === String(hidden.value));
+  if(actualizado){
+    CAJA_SELECTED_PRESTAMO = actualizado; // refresca la referencia al objeto vigente
+  } else if((DATA.prestamos||[]).length > 0){
+    // Solo borramos si de verdad tenemos datos y el préstamo ya no está entre
+    // los activos (por ejemplo, se terminó de pagar). Si DATA.prestamos está
+    // vacío, es más probable que sea una carga de datos aún en curso que una
+    // selección inválida, así que no tocamos nada en ese caso.
     clearCajaSelection();
   }
 }
@@ -1332,17 +1366,60 @@ function onCajaSearchInput(){
   results.classList.add('show');
 }
 function selectCajaPrestamoAt(idx){
+  if(!CAJA_LAST_MATCHES || !CAJA_LAST_MATCHES[idx]){
+    console.error('ERROR: No hay préstamo en índice', idx);
+    toast('Error al seleccionar, intenta de nuevo');
+    return;
+  }
+  
   const prestamo = CAJA_LAST_MATCHES[idx];
-  if(!prestamo) return;
+  
+  // Validar que el préstamo tenga un ID
+  if(!prestamo.ID){
+    console.error('ERROR: Préstamo sin ID', prestamo);
+    toast('El préstamo no tiene ID, contacta soporte');
+    return;
+  }
+  
+  // Asignar el préstamo seleccionado a la variable global
   CAJA_SELECTED_PRESTAMO = prestamo;
-  document.getElementById('co-prestamo').value = prestamo.ID;
-  document.getElementById('co-search').value = prestamo.ClienteNombre||'';
-  document.getElementById('co-search-results').classList.remove('show');
+  
+  // Asignar el ID al campo oculto (ESTO ES CRÍTICO)
+  const inputOculto = document.getElementById('co-prestamo');
+  if(inputOculto){
+    inputOculto.value = String(prestamo.ID).trim();
+    console.log('✓ Préstamo seleccionado, ID asignado:', prestamo.ID);
+  }
+  
+  // Actualizar el campo de búsqueda visible
+  const inputBusqueda = document.getElementById('co-search');
+  if(inputBusqueda){
+    inputBusqueda.value = prestamo.ClienteNombre || '';
+  }
+  
+  // Ocultar el dropdown de resultados
+  const resultados = document.getElementById('co-search-results');
+  if(resultados){
+    resultados.classList.remove('show');
+  }
+  
+  // Mostrar el badge con el cliente seleccionado
   const restante = Number(prestamo.NumCuotas||0) - Number(prestamo.CuotasPagadas||0);
   const badge = document.getElementById('co-prestamo-badge');
-  badge.style.display = 'block';
-  badge.innerHTML = `<span class="cliente-badge" style="background:#D9E2F7;color:var(--navy);">${prestamo.ClienteNombre} · ${restante} cuota(s) restantes<button onclick="clearCajaSelection()">✕</button></span>`;
+  if(badge){
+    badge.style.display = 'block';
+    badge.innerHTML = `
+      <span class="cliente-badge" style="background:#D9E2F7;color:var(--navy);">
+        ${prestamo.ClienteNombre} · ${restante} cuota(s) restantes
+        <button onclick="clearCajaSelection()" style="background:none;border:none;color:var(--navy);font-weight:800;cursor:pointer;font-size:14px;padding:0 0 0 4px;">✕</button>
+      </span>
+    `;
+  }
+  
+  // Pre-rellenar el monto de la cuota
   prefillCuota();
+  
+  console.log('DEBUG: Préstamo seleccionado:', prestamo);
 }
 function clearCajaSelection(){
   CAJA_SELECTED_PRESTAMO = null;
@@ -1360,8 +1437,19 @@ document.addEventListener('click', function(e){
 });
 function prefillCuota(){
   const prestamo = CAJA_SELECTED_PRESTAMO;
-  if(prestamo && prestamo.CuotaValor){
-    const valor = Math.round(Math.min(prestamo.CuotaValor, prestamo.SaldoPendiente??prestamo.CuotaValor)*100)/100;
+  if(!prestamo) return;
+  // Si CuotaValor viene vacío/0/inválido en la planilla (préstamos viejos o con
+  // datos incompletos), lo calculamos como respaldo a partir de MontoTotal/NumCuotas
+  // para que el campo "Monto a cobrar" nunca quede vacío en silencio.
+  let cuotaValor = Number(prestamo.CuotaValor);
+  if(!cuotaValor || isNaN(cuotaValor)){
+    const total = Number(prestamo.MontoTotal || 0);
+    const cuotas = Number(prestamo.NumCuotas || 0);
+    cuotaValor = cuotas > 0 ? total / cuotas : 0;
+  }
+  if(cuotaValor > 0){
+    const saldo = Number(prestamo.SaldoPendiente ?? cuotaValor);
+    const valor = Math.round(Math.min(cuotaValor, saldo)*100)/100;
     document.getElementById('co-monto').value = valor.toLocaleString('es-PY');
   }
 }
@@ -1370,35 +1458,115 @@ async function registerPayment(){
   // Si ya se está procesando un pago, no hace nada (evita registrar el pago dos veces)
   if(!setButtonBusy(btn, true, 'Registrando...')) return;
   try{
-    const prestamoId = document.getElementById('co-prestamo').value;
+    // Obtener el ID del campo oculto
+    let prestamoId = document.getElementById('co-prestamo').value.trim();
+    
+    // DEBUG: Mostrar qué está pasando
+    console.log('DEBUG registerPayment: prestamoId inicial =', prestamoId);
+    console.log('DEBUG registerPayment: CAJA_SELECTED_PRESTAMO =', CAJA_SELECTED_PRESTAMO);
+    
+    // Respaldo: si por algún motivo el campo oculto quedó vacío pero todavía
+    // tenemos la referencia del préstamo elegido en memoria (CAJA_SELECTED_PRESTAMO),
+    // la usamos igual en vez de obligar a repetir la búsqueda.
+    if(!prestamoId && CAJA_SELECTED_PRESTAMO && CAJA_SELECTED_PRESTAMO.ID){
+      prestamoId = String(CAJA_SELECTED_PRESTAMO.ID).trim();
+      document.getElementById('co-prestamo').value = prestamoId;
+      console.log('DEBUG registerPayment: ID obtenido del respaldo =', prestamoId);
+    }
+    
+    // Obtener y validar el monto
     const monto = parseMonto(document.getElementById('co-monto').value);
-    if(!prestamoId || !monto){ toast('Selecciona un préstamo e ingresa el monto'); return; }
-    // Usamos el objeto exacto que se seleccionó en la búsqueda (no un find()
-    // por ID, que podría traer otro préstamo si hay IDs repetidos en la hoja).
-    const prestamo = (CAJA_SELECTED_PRESTAMO && String(CAJA_SELECTED_PRESTAMO.ID)===String(prestamoId))
-      ? CAJA_SELECTED_PRESTAMO
-      : DATA.prestamos.find(p=>String(p.ID)===String(prestamoId));
+    
+    // Validaciones
+    if(!prestamoId){
+      console.error('ERROR: No hay ID de préstamo');
+      toast('❌ Selecciona un préstamo/cliente de la lista');
+      return;
+    }
+    if(!monto){
+      console.error('ERROR: No hay monto');
+      toast('❌ Ingresa el monto a cobrar');
+      return;
+    }
+    
+    console.log('DEBUG registerPayment: Validaciones pasadas, prestamoId=', prestamoId, 'monto=', monto);
+    
+    // Buscar el objeto del préstamo
+    let prestamo = null;
+    
+    // Primero intentar usar el objeto en memoria si coincide el ID
+    if(CAJA_SELECTED_PRESTAMO && String(CAJA_SELECTED_PRESTAMO.ID) === String(prestamoId)){
+      prestamo = CAJA_SELECTED_PRESTAMO;
+      console.log('DEBUG registerPayment: Usando préstamo de memoria');
+    } else {
+      // Si no, buscarlo en DATA.prestamos
+      prestamo = DATA.prestamos.find(p => String(p.ID) === String(prestamoId));
+      console.log('DEBUG registerPayment: Buscado en DATA.prestamos, encontrado=', prestamo ? 'SÍ' : 'NO');
+    }
+    
+    if(!prestamo){
+      console.error('ERROR: No se encontró el préstamo con ID', prestamoId);
+      console.error('DEBUG: DATA.prestamos disponibles:', DATA.prestamos);
+      toast('❌ No se encontró el préstamo. Intenta de nuevo.');
+      return;
+    }
+    
+    // Crear el registro del pago
     const pago = {
-      ID:genId('PG'), PrestamoID:prestamoId, ClienteNombre:prestamo? prestamo.ClienteNombre:'',
-      Monto:monto, Fecha: document.getElementById('co-fecha').value || new Date().toISOString().slice(0,10),
+      ID: genId('PG'),
+      PrestamoID: prestamoId,
+      ClienteNombre: prestamo.ClienteNombre || '',
+      Monto: monto,
+      Fecha: document.getElementById('co-fecha').value || new Date().toISOString().slice(0,10),
       Metodo: document.getElementById('co-metodo').value
     };
-    await apiCall('add','pagos',pago);
+    
+    console.log('DEBUG registerPayment: Pago a registrar:', pago);
+    
+    // Registrar el pago en el servidor
+    await apiCall('add', 'pagos', pago);
     DATA.pagos.push(pago);
+    
+    // Actualizar el estado del préstamo
     if(prestamo){
       const totalPrestamo = Number(prestamo.MontoTotal ?? prestamo.SaldoPendiente ?? 0);
       prestamo.SaldoPendiente = Math.max(0, Number(prestamo.SaldoPendiente ?? totalPrestamo) - monto);
       const cuotaVal = Number(prestamo.CuotaValor || 1);
-      prestamo.CuotasPagadas = Math.min(Number(prestamo.NumCuotas||0), Math.round((totalPrestamo - prestamo.SaldoPendiente) / cuotaVal));
-      if(prestamo.SaldoPendiente <= 0) prestamo.Estado = 'Pagado';
-      await apiCall('update','prestamos', prestamo);
+      prestamo.CuotasPagadas = Math.min(
+        Number(prestamo.NumCuotas||0),
+        Math.round((totalPrestamo - prestamo.SaldoPendiente) / cuotaVal)
+      );
+      if(prestamo.SaldoPendiente <= 0){
+        prestamo.Estado = 'Pagado';
+      }
+      await apiCall('update', 'prestamos', prestamo);
+      console.log('DEBUG registerPayment: Préstamo actualizado:', prestamo);
     }
-    toast('Pago registrado ✓');
-    document.getElementById('co-monto').value='';
+    
+    toast('✓ Pago registrado exitosamente');
+    
+    // Limpiar el formulario
+    document.getElementById('co-monto').value = '';
     clearCajaSelection();
-    renderDashboard(); renderCobrosSelect(); renderCobrosList(); renderReportes(); renderAtrasados(); renderVencimientos(); renderCreditos();
-    if(prestamo) showReceipt(pago, prestamo);
-  } finally {
+    
+    // Actualizar todas las vistas
+    renderDashboard();
+    renderCobrosSelect();
+    renderCobrosList();
+    renderReportes();
+    renderAtrasados();
+    renderVencimientos();
+    renderCreditos();
+    
+    // Mostrar comprobante
+    if(prestamo){
+      showReceipt(pago, prestamo);
+    }
+    
+  }catch(err){
+    console.error('ERROR en registerPayment:', err);
+    toast('❌ Error al registrar el pago: ' + err.message);
+  }finally{
     setButtonBusy(btn, false);
   }
 }
@@ -1753,7 +1921,7 @@ function buildPagarePDF(){
   y += 13;
   doc.setFont(undefined,'normal'); doc.setFontSize(8);
   doc.setTextColor(120);
-  doc.text('(.)', pageWidth/2, y, {align:'center'});
+  doc.text('.', pageWidth/2, y, {align:'center'});
   doc.setTextColor(0);
   y += 22;
 
