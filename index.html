@@ -119,6 +119,8 @@
   input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
   input[type=number]{-moz-appearance:textfield;}
   .btn{width:100%;padding:15px;border-radius:14px;border:none;font-size:16px;font-weight:800;cursor:pointer;margin-top:18px;}
+  .btn-small{width:auto;padding:10px 14px;border-radius:8px;border:none;font-size:12px;font-weight:600;cursor:pointer;margin:0;background:var(--navy);color:#fff;}
+  .btn-small:hover{opacity:0.9;}
   .btn-primary{background:var(--navy);color:#fff;}
   .btn-green{background:var(--green);color:#fff;}
   .btn-orange{background:var(--orange);color:#fff;}
@@ -1921,7 +1923,7 @@ function buildPagarePDF(){
   y += 13;
   doc.setFont(undefined,'normal'); doc.setFontSize(8);
   doc.setTextColor(120);
-  doc.text('.', pageWidth/2, y, {align:'center'});
+  doc.text('(.)', pageWidth/2, y, {align:'center'});
   doc.setTextColor(0);
   y += 22;
 
@@ -2128,9 +2130,19 @@ function renderClientList(){
     const refs = [];
     if(c.Referencia1Nombre) refs.push(`Ref. 1: ${c.Referencia1Nombre}${c.Referencia1Telefono? ' ('+c.Referencia1Telefono+')':''}`);
     if(c.Referencia2Nombre) refs.push(`Ref. 2: ${c.Referencia2Nombre}${c.Referencia2Telefono? ' ('+c.Referencia2Telefono+')':''}`);
+    
+    // ← FIX: Calcular deuda TOTAL del cliente (suma de todos sus préstamos activos)
+    const deudaCliente = (DATA.prestamos||[])
+      .filter(p => p.ClienteNombre === c.Nombre && (p.Estado||'Activo') !== 'Pagado')
+      .reduce((sum, p) => sum + Number(p.SaldoPendiente ?? p.MontoTotal ?? 0), 0);
+    
     return `
     <div class="list-item">
-      <div><div class="li-name">${c.Nombre}</div><div class="li-sub">CI ${c.CI||'—'} · ${c.Telefono||''} ${c.Direccion? '· '+c.Direccion:''}${c.Referencia? '<br>Ref: '+c.Referencia:''}${refs.length? '<br>'+refs.join(' · '):''}</div></div>
+      <div>
+        <div class="li-name">${c.Nombre}</div>
+        <div class="li-sub">CI ${c.CI||'—'} · ${c.Telefono||''} ${c.Direccion? '· '+c.Direccion:''}${c.Referencia? '<br>Ref: '+c.Referencia:''}${refs.length? '<br>'+refs.join(' · '):''}</div>
+      </div>
+      <div class="li-amount ${deudaCliente > 0 ? 'neg' : 'ok'}">Gs. ${deudaCliente.toLocaleString()}</div>
     </div>`;
   }).join('');
 }
@@ -2295,20 +2307,26 @@ function renderCreditos(){
     const badgeText = estado === 'Pagado' ? 'Cancelado' : 'Activo';
     const nombreMostrado = palabras.length ? resaltarCoincidencia(p.ClienteNombre||'', palabras) : (p.ClienteNombre||'');
     return `
-      <div class="credito-card" onclick="abrirDocumentosCredito('${p.ID}')">
-        <div class="credito-head">
-          <div>
-            <h4>${nombreMostrado}</h4>
-            <div class="li-sub">CI ${cliente?cliente.CI||'—':'—'} · ${p.Frecuencia||''} · ${p.NumCuotas||0} cuotas${p.CodeudorNombre? '<br>Codeudor: '+p.CodeudorNombre+(p.CodeudorCI? ' (CI '+p.CodeudorCI+')':''):''}</div>
+      <div class="credito-card">
+        <div onclick="abrirDocumentosCredito('${p.ID}')" style="cursor:pointer;">
+          <div class="credito-head">
+            <div>
+              <h4>${nombreMostrado}</h4>
+              <div class="li-sub">CI ${cliente?cliente.CI||'—':'—'} · ${p.Frecuencia||''} · ${p.NumCuotas||0} cuotas${p.CodeudorNombre? '<br>Codeudor: '+p.CodeudorNombre+(p.CodeudorCI? ' (CI '+p.CodeudorCI+')':''):''}</div>
+            </div>
+            <span class="badge ${badgeClass}">${badgeText}</span>
           </div>
-          <span class="badge ${badgeClass}">${badgeText}</span>
+          <div class="row"><span>Monto total</span><span>Gs. ${total.toLocaleString()}</span></div>
+          <div class="row"><span>Cuotas pagadas</span><span>${p.CuotasPagadas||0} de ${p.NumCuotas||0}</span></div>
+          <div class="row"><span>Saldo pendiente</span><span>Gs. ${saldo.toLocaleString()}</span></div>
+          <div class="credito-progress"><div class="credito-progress-fill" style="width:${pct}%;"></div></div>
+          <div class="credito-progress-label">${pct}% pagado</div>
+          <div class="credito-docs-hint">🖨️ Toca para reimprimir Pagaré, Recibo o Proforma</div>
         </div>
-        <div class="row"><span>Monto total</span><span>Gs. ${total.toLocaleString()}</span></div>
-        <div class="row"><span>Cuotas pagadas</span><span>${p.CuotasPagadas||0} de ${p.NumCuotas||0}</span></div>
-        <div class="row"><span>Saldo pendiente</span><span>Gs. ${saldo.toLocaleString()}</span></div>
-        <div class="credito-progress"><div class="credito-progress-fill" style="width:${pct}%;"></div></div>
-        <div class="credito-progress-label">${pct}% pagado</div>
-        <div class="credito-docs-hint">🖨️ Toca para reimprimir Pagaré, Recibo o Proforma</div>
+        <div style="display:flex;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid #e0e0e0;">
+          <button class="btn btn-small" onclick="compartirResumenDeuda('${p.ID}')" style="flex:1;font-size:12px;">📤 Compartir Resumen</button>
+          <button class="btn btn-small" onclick="copiarResumenDeuda('${p.ID}')" style="flex:1;font-size:12px;">📋 Copiar</button>
+        </div>
       </div>`;
   }).join('');
 }
@@ -2324,6 +2342,108 @@ function abrirDocumentosCredito(prestamoId){
   if(!cliente) cliente = { Nombre: loan.ClienteNombre||'', CI:'', Telefono:'', Direccion:'' };
   showPagare(cliente, loan);
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// COMPARTIR RESUMEN DE DEUDA
+// ═══════════════════════════════════════════════════════════════════════
+function generarResumenDeuda(prestamoId){
+  const prestamo = (DATA.prestamos||[]).find(p => String(p.ID) === String(prestamoId));
+  if(!prestamo) return '';
+  
+  const cliente = (DATA.clientes||[]).find(c => c.ID === prestamo.ClienteID) || {};
+  const total = Number(prestamo.MontoTotal || 0);
+  const saldo = Number(prestamo.SaldoPendiente ?? total);
+  const pagado = total - saldo;
+  const cuotasPagadas = Number(prestamo.CuotasPagadas || 0);
+  const cuotasTotal = Number(prestamo.NumCuotas || 0);
+  const cuotasRestantes = cuotasTotal - cuotasPagadas;
+  const pct = total > 0 ? Math.round((pagado / total) * 100) : 0;
+  const hoy = new Date().toLocaleDateString('es-PY');
+  
+  const resumen = `
+📋 *RESUMEN DE DEUDA*
+${Array(40).fill('—').join('')}
+
+👤 *Cliente:* ${prestamo.ClienteNombre || cliente.Nombre || 'N/A'}
+🆔 *CI:* ${cliente.CI || 'N/A'}
+📅 *Fecha:* ${hoy}
+
+💰 *DETALLES FINANCIEROS*
+${Array(40).fill('—').join('')}
+💵 Monto Original: Gs. ${total.toLocaleString()}
+✅ Monto Pagado: Gs. ${pagado.toLocaleString()}
+⏳ Saldo Pendiente: Gs. ${saldo.toLocaleString()}
+📊 Progreso: ${pct}% pagado
+
+📦 *CUOTAS*
+${Array(40).fill('—').join('')}
+📍 Cuotas Pagadas: ${cuotasPagadas} de ${cuotasTotal}
+⏳ Cuotas Restantes: ${cuotasRestantes}
+💵 Valor por Cuota: Gs. ${(total / cuotasTotal).toLocaleString()}
+
+${saldo === 0 ? '✅ *ESTADO: SALDADO*' : `⚠️ *DEUDA ACTIVA: Gs. ${saldo.toLocaleString()}*`}
+${Array(40).fill('—').join('')}
+
+Este resumen fue generado automáticamente.
+Capital Amigo 💼
+  `.trim();
+  
+  return resumen;
+}
+
+function compartirResumenDeuda(prestamoId){
+  const resumen = generarResumenDeuda(prestamoId);
+  if(!resumen) {
+    toast('No se pudo generar el resumen');
+    return;
+  }
+  
+  const prestamo = (DATA.prestamos||[]).find(p => String(p.ID) === String(prestamoId));
+  const cliente = (DATA.clientes||[]).find(c => c.ID === prestamo.ClienteID) || {};
+  const telefono = cliente.Telefono || '';
+  
+  if(!telefono){
+    toast('⚠️ El cliente no tiene teléfono registrado');
+    return;
+  }
+  
+  // Limpiar el teléfono: quitar espacios y caracteres especiales
+  let tel = telefono.replace(/\D/g, '');
+  // Si no tiene código de país, agregar 595 (Paraguay)
+  if(!tel.startsWith('595')){
+    if(tel.startsWith('0')) tel = tel.substring(1);
+    tel = '595' + tel;
+  }
+  
+  // Crear mensaje de WhatsApp
+  const mensajeWhatsApp = encodeURIComponent(resumen);
+  const urlWhatsApp = `https://wa.me/${tel}?text=${mensajeWhatsApp}`;
+  
+  window.open(urlWhatsApp, '_blank');
+  console.log('Compartiendo resumen por WhatsApp a:', tel);
+}
+
+function copiarResumenDeuda(prestamoId){
+  const resumen = generarResumenDeuda(prestamoId);
+  if(!resumen) {
+    toast('No se pudo generar el resumen');
+    return;
+  }
+  
+  navigator.clipboard.writeText(resumen).then(() => {
+    toast('✓ Resumen copiado al portapapeles');
+  }).catch(() => {
+    // Fallback para navegadores antiguos
+    const textarea = document.createElement('textarea');
+    textarea.value = resumen;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    toast('✓ Resumen copiado al portapapeles');
+  });
+}
+
 function renderReportes(){
   if(!document.getElementById('rep-clientes')) return;
   document.getElementById('rep-clientes').textContent = (DATA.clientes||[]).length;
@@ -2549,4 +2669,5 @@ function setButtonBusy(btn, busy, busyText){
 </script>
 </body>
 </html>
+
 
